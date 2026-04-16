@@ -3,7 +3,7 @@
 [![Go Version](https://img.shields.io/badge/go-1.22-00ADD8?style=for-the-badge&logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 [![Build](https://img.shields.io/badge/build-passing-brightgreen?style=for-the-badge)](#tests)
-[![Tests](https://img.shields.io/badge/tests-216%20passing-brightgreen?style=for-the-badge)](#tests)
+[![Tests](https://img.shields.io/badge/tests-235%20passing-brightgreen?style=for-the-badge)](#tests)
 [![MCP](https://img.shields.io/badge/protocol-MCP%20JSON--RPC%202.0-blueviolet?style=for-the-badge)](https://modelcontextprotocol.io)
 
 > Protocol-aware load tester and benchmarker for MCP (Model Context Protocol) servers.
@@ -374,7 +374,7 @@ mcpbench version
 
 ## Tests
 
-216 tests across transport (stdio + HTTP + SSE), scenario loading, metrics
+235 tests across transport (stdio + HTTP + SSE), scenario loading, metrics
 aggregation, compare / regression, CLI integration, and end-to-end flows
 driven by a real JSON-RPC stdio subprocess.
 

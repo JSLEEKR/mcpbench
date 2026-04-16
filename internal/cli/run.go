@@ -84,7 +84,9 @@ func runExecute(stdout, stderr io.Writer, f *runFlags) error {
 	if err != nil {
 		return err
 	}
-	applyCLIOverrides(s, f)
+	if err := applyCLIOverrides(s, f); err != nil {
+		return err
+	}
 
 	// Validate after overrides.
 	if err := s.Validate(); err != nil {
@@ -157,13 +159,21 @@ func seconds(d time.Duration) float64 {
 	return d.Seconds()
 }
 
-func applyCLIOverrides(s *scenario.Scenario, f *runFlags) {
+func applyCLIOverrides(s *scenario.Scenario, f *runFlags) error {
 	if f.transport != "" {
 		s.Transport.Type = f.transport
 	}
 	if f.spawn != "" {
-		// Parse "node server.js" into cmd + args.
-		parts := strings.Fields(f.spawn)
+		// Parse "node server.js" into cmd + args. parseSpawn handles quoted
+		// arguments (single and double) and backslash escapes so that paths
+		// with spaces (e.g. `C:\Program Files\node\node.exe`) and quoted
+		// arguments (e.g. `node "my file.js"`) are honored. Using
+		// strings.Fields here would silently split those on whitespace, which
+		// broke every Windows user with a non-trivial install path.
+		parts, err := parseSpawn(f.spawn)
+		if err != nil {
+			return fmt.Errorf("--spawn: %w", err)
+		}
 		if len(parts) > 0 {
 			s.Transport.Cmd = parts[0]
 			s.Transport.Args = parts[1:]
@@ -198,6 +208,71 @@ func applyCLIOverrides(s *scenario.Scenario, f *runFlags) {
 	if f.thinkTime > 0 {
 		s.Workload.ThinkTime = f.thinkTime
 	}
+	return nil
+}
+
+// parseSpawn is a minimal shlex-style splitter used exclusively by --spawn. It
+// splits on unquoted whitespace, honors single and double quotes (neither of
+// which interpret further escapes inside themselves — matching POSIX single-
+// quote semantics, and treating double quotes the same way since we don't do
+// variable expansion), and supports backslash escapes OUTSIDE quotes so that
+// users can also write `/tmp/my\ dir/testmock` in addition to
+// `'/tmp/my dir/testmock'`. Returns an error on an unterminated quote.
+//
+// We intentionally do NOT implement shell metacharacter handling (redirects,
+// pipes, variable expansion): --spawn is handed directly to exec.Command, not
+// to `sh -c`, so there is no shell to honor those anyway and failing loudly is
+// better than silently accepting shell syntax that never fires.
+func parseSpawn(s string) ([]string, error) {
+	var parts []string
+	var cur strings.Builder
+	inQuote := byte(0) // 0 = not in quote, '\'' or '"' when inside
+	escaped := false
+	emitted := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			cur.WriteByte(c)
+			escaped = false
+			emitted = true
+			continue
+		}
+		if inQuote != 0 {
+			if c == inQuote {
+				inQuote = 0
+				emitted = true
+				continue
+			}
+			cur.WriteByte(c)
+			continue
+		}
+		switch c {
+		case '\\':
+			escaped = true
+		case '\'', '"':
+			inQuote = c
+			emitted = true
+		case ' ', '\t':
+			if emitted {
+				parts = append(parts, cur.String())
+				cur.Reset()
+				emitted = false
+			}
+		default:
+			cur.WriteByte(c)
+			emitted = true
+		}
+	}
+	if inQuote != 0 {
+		return nil, fmt.Errorf("unterminated %c quote", inQuote)
+	}
+	if escaped {
+		return nil, fmt.Errorf("trailing backslash")
+	}
+	if emitted {
+		parts = append(parts, cur.String())
+	}
+	return parts, nil
 }
 
 func buildTransport(ctx context.Context, s *scenario.Scenario, f *runFlags) (transport.Transport, error) {

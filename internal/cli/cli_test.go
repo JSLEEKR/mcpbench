@@ -268,7 +268,9 @@ func TestCompareAcceptsMSForLatency(t *testing.T) {
 func TestApplyCLIOverridesSpawnParses(t *testing.T) {
 	s := minimalScenarioStruct()
 	f := &runFlags{spawn: "node server.js --port 1"}
-	applyCLIOverrides(s, f)
+	if err := applyCLIOverrides(s, f); err != nil {
+		t.Fatal(err)
+	}
 	if s.Transport.Cmd != "node" {
 		t.Fatalf("cmd %s", s.Transport.Cmd)
 	}
@@ -281,7 +283,9 @@ func TestApplyCLIOverridesDurationSwitchesRequests(t *testing.T) {
 	s := minimalScenarioStruct()
 	s.Workload.Requests = 10
 	f := &runFlags{duration: 5 * time.Second}
-	applyCLIOverrides(s, f)
+	if err := applyCLIOverrides(s, f); err != nil {
+		t.Fatal(err)
+	}
 	if s.Workload.Requests != 0 {
 		t.Fatal("requests not cleared")
 	}
@@ -294,9 +298,86 @@ func TestApplyCLIOverridesRequestsSwitchesDuration(t *testing.T) {
 	s := minimalScenarioStruct()
 	s.Workload.Duration = 5 * time.Second
 	f := &runFlags{requests: 10}
-	applyCLIOverrides(s, f)
+	if err := applyCLIOverrides(s, f); err != nil {
+		t.Fatal(err)
+	}
 	if s.Workload.Duration != 0 {
 		t.Fatal("duration not cleared")
+	}
+}
+
+// TestApplyCLIOverridesSpawnQuotedPath is a regression test for a bug where
+// --spawn used strings.Fields, which split paths containing spaces (very
+// common on Windows: `C:\Program Files\node\node.exe`) into two pieces,
+// producing bogus Cmd / Args. A shlex-style splitter now honors single and
+// double quotes AND backslash escapes.
+func TestApplyCLIOverridesSpawnQuotedPath(t *testing.T) {
+	s := minimalScenarioStruct()
+	f := &runFlags{spawn: `"/tmp/my dir/testmock" --flag value`}
+	if err := applyCLIOverrides(s, f); err != nil {
+		t.Fatal(err)
+	}
+	if s.Transport.Cmd != "/tmp/my dir/testmock" {
+		t.Fatalf("cmd = %q", s.Transport.Cmd)
+	}
+	if len(s.Transport.Args) != 2 || s.Transport.Args[0] != "--flag" || s.Transport.Args[1] != "value" {
+		t.Fatalf("args = %#v", s.Transport.Args)
+	}
+}
+
+func TestApplyCLIOverridesSpawnSingleQuotedArg(t *testing.T) {
+	s := minimalScenarioStruct()
+	f := &runFlags{spawn: `node 'my file.js' arg1`}
+	if err := applyCLIOverrides(s, f); err != nil {
+		t.Fatal(err)
+	}
+	if s.Transport.Cmd != "node" {
+		t.Fatalf("cmd = %q", s.Transport.Cmd)
+	}
+	if len(s.Transport.Args) != 2 || s.Transport.Args[0] != "my file.js" || s.Transport.Args[1] != "arg1" {
+		t.Fatalf("args = %#v", s.Transport.Args)
+	}
+}
+
+func TestApplyCLIOverridesSpawnBackslashEscape(t *testing.T) {
+	s := minimalScenarioStruct()
+	f := &runFlags{spawn: `/tmp/my\ dir/testmock --foo`}
+	if err := applyCLIOverrides(s, f); err != nil {
+		t.Fatal(err)
+	}
+	if s.Transport.Cmd != "/tmp/my dir/testmock" {
+		t.Fatalf("cmd = %q", s.Transport.Cmd)
+	}
+	if len(s.Transport.Args) != 1 || s.Transport.Args[0] != "--foo" {
+		t.Fatalf("args = %#v", s.Transport.Args)
+	}
+}
+
+func TestApplyCLIOverridesSpawnUnterminatedQuote(t *testing.T) {
+	s := minimalScenarioStruct()
+	f := &runFlags{spawn: `node "my file.js`}
+	err := applyCLIOverrides(s, f)
+	if err == nil {
+		t.Fatal("expected unterminated-quote error")
+	}
+	if !strings.Contains(err.Error(), "unterminated") {
+		t.Fatalf("error should mention unterminated: %v", err)
+	}
+}
+
+func TestApplyCLIOverridesSpawnEmptyQuotedSurvives(t *testing.T) {
+	// An empty quoted token is a valid (albeit weird) input; it should produce
+	// a single empty-string argument rather than being dropped on the floor.
+	s := minimalScenarioStruct()
+	f := &runFlags{spawn: `node "" arg`}
+	if err := applyCLIOverrides(s, f); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Transport.Args) != 2 {
+		t.Fatalf("args = %#v", s.Transport.Args)
+	}
+	if s.Transport.Args[0] != "" || s.Transport.Args[1] != "arg" {
+		t.Fatalf("args = %#v", s.Transport.Args)
 	}
 }
 
