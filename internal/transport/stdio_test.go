@@ -356,6 +356,30 @@ func TestStdioDemuxDistinctIDs(t *testing.T) {
 	}
 }
 
+// TestStdioReadErrorNoRace is a regression test: ReadError() used to read the
+// unprotected `readErr` field while the reader goroutine wrote to it, which
+// `go test -race` flagged as a data race on any transport whose subprocess
+// exited concurrently with diagnostic reads. Serialize both sides on a mutex.
+func TestStdioReadErrorNoRace(t *testing.T) {
+	s := startMock(t)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		_, _ = s.Call(ctx, "crash", nil)
+	}()
+	go func() {
+		defer wg.Done()
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			_ = s.ReadError()
+		}
+	}()
+	wg.Wait()
+}
+
 func contains(hay, needle []byte) bool {
 	return indexOf(hay, needle) >= 0
 }

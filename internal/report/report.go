@@ -217,7 +217,12 @@ func sanitizeLabel(s string) string {
 	b.Grow(len(s))
 	for _, r := range s {
 		switch {
-		case r == '"', r == '\\', r == '\n':
+		// Replace characters that the Prometheus text-exposition grammar
+		// forbids inside a double-quoted label value (", \, LF) *and* CR,
+		// which is still a line terminator — leaving a CR in the output
+		// would split one exposition line into two syntactically invalid
+		// ones and cause scrape failures.
+		case r == '"', r == '\\', r == '\n', r == '\r':
 			b.WriteByte('_')
 		default:
 			b.WriteRune(r)

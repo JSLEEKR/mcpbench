@@ -48,7 +48,8 @@ type Stdio struct {
 	closeMu  sync.Mutex
 	waitDone chan error
 	readerWG sync.WaitGroup
-	readErr  error
+	readErrMu sync.Mutex
+	readErr   error
 }
 
 type pendingResult struct {
@@ -139,7 +140,9 @@ func (s *Stdio) readLoop(r io.ReadCloser) {
 	if err == nil {
 		err = io.EOF
 	}
+	s.readErrMu.Lock()
 	s.readErr = err
+	s.readErrMu.Unlock()
 	// Wake any still-waiting callers.
 	s.pending.Range(func(key, val any) bool {
 		ch := val.(chan pendingResult)
@@ -245,5 +248,9 @@ func (s *Stdio) Close() error {
 }
 
 // ReadError returns the error that caused the reader goroutine to exit, if
-// any. Useful for diagnostics in tests.
-func (s *Stdio) ReadError() error { return s.readErr }
+// any. Useful for diagnostics in tests. Safe for concurrent use.
+func (s *Stdio) ReadError() error {
+	s.readErrMu.Lock()
+	defer s.readErrMu.Unlock()
+	return s.readErr
+}

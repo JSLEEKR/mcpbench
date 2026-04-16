@@ -59,8 +59,28 @@ func Run(ctx context.Context, cfg Config) (time.Duration, error) {
 		return picker.Next()
 	}
 
+	// Seed the .Rand template source. A non-zero Seed makes both tool
+	// selection AND the .Rand template variable reproducible run-to-run;
+	// Seed=0 derives fresh randomness from the wall clock (also used by the
+	// picker fallback).
+	var randSrc rand.Source
+	if cfg.Seed != 0 {
+		// Offset from the picker's seed so the two streams don't march in
+		// lockstep when a scenario uses both weighted selection and .Rand.
+		randSrc = rand.NewSource(cfg.Seed ^ 0x5EED_5EED)
+	} else {
+		randSrc = rand.NewSource(time.Now().UnixNano())
+	}
+	rng := rand.New(randSrc)
+	var rngMu sync.Mutex
+	nextRand := func() float64 {
+		rngMu.Lock()
+		defer rngMu.Unlock()
+		return rng.Float64()
+	}
+
 	workers := effectiveWorkers(w)
-	measureStart, err := runPhases(ctx, cfg, nextTool, workers)
+	measureStart, err := runPhases(ctx, cfg, nextTool, nextRand, workers)
 	return measureStart, err
 }
 
@@ -89,14 +109,14 @@ type job struct {
 	iter int64
 }
 
-func runPhases(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCall, workers int) (time.Duration, error) {
+func runPhases(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCall, nextRand func() float64, workers int) (time.Duration, error) {
 	// Optionally run warmup: identical dispatch, but results recorded in a
 	// throwaway aggregator.
 	var warmupAgg *metrics.Aggregator
 	if cfg.Scenario.Workload.Warmup > 0 {
 		warmupAgg = metrics.NewAggregator(1024)
 		warmupCtx, cancel := context.WithTimeout(ctx, cfg.Scenario.Workload.Warmup)
-		if err := runPhase(warmupCtx, cfg, nextTool, workers, warmupAgg, cfg.Scenario.Workload.Warmup, 0); err != nil &&
+		if err := runPhase(warmupCtx, cfg, nextTool, nextRand, workers, warmupAgg, cfg.Scenario.Workload.Warmup, 0); err != nil &&
 			!errors.Is(err, context.DeadlineExceeded) &&
 			!errors.Is(err, context.Canceled) {
 			cancel()
@@ -112,10 +132,10 @@ func runPhases(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCa
 	requestsBudget := cfg.Scenario.Workload.Requests
 	if durationBudget > 0 {
 		measureCtx, cancel := context.WithTimeout(ctx, durationBudget)
-		measureErr = runPhase(measureCtx, cfg, nextTool, workers, cfg.Aggregator, durationBudget, 0)
+		measureErr = runPhase(measureCtx, cfg, nextTool, nextRand, workers, cfg.Aggregator, durationBudget, 0)
 		cancel()
 	} else {
-		measureErr = runPhase(ctx, cfg, nextTool, workers, cfg.Aggregator, 0, requestsBudget)
+		measureErr = runPhase(ctx, cfg, nextTool, nextRand, workers, cfg.Aggregator, 0, requestsBudget)
 	}
 	elapsed := time.Since(startMeasure)
 	if measureErr != nil && !errors.Is(measureErr, context.DeadlineExceeded) && !errors.Is(measureErr, context.Canceled) {
@@ -136,14 +156,14 @@ func runPhases(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCa
 
 // runPhase fires load under either duration OR requests budget. Exactly one
 // must be non-zero.
-func runPhase(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCall, workers int, agg *metrics.Aggregator, duration time.Duration, requests int) error {
+func runPhase(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCall, nextRand func() float64, workers int, agg *metrics.Aggregator, duration time.Duration, requests int) error {
 	jobs := make(chan job, workers*2)
 	var wg sync.WaitGroup
 
 	// Workers.
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go worker(ctx, cfg, nextTool, jobs, agg, &wg)
+		go worker(ctx, cfg, nextTool, nextRand, jobs, agg, &wg)
 	}
 
 	// Generator: produces jobs under the chosen rate / count / duration.
@@ -153,7 +173,7 @@ func runPhase(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCal
 	return genErr
 }
 
-func worker(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCall, jobs <-chan job, agg *metrics.Aggregator, wg *sync.WaitGroup) {
+func worker(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCall, nextRand func() float64, jobs <-chan job, agg *metrics.Aggregator, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		select {
@@ -163,12 +183,12 @@ func worker(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCall,
 			if !ok {
 				return
 			}
-			executeOne(ctx, cfg, nextTool, j, agg)
+			executeOne(ctx, cfg, nextTool, nextRand, j, agg)
 		}
 	}
 }
 
-func executeOne(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCall, j job, agg *metrics.Aggregator) {
+func executeOne(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCall, nextRand func() float64, j job, agg *metrics.Aggregator) {
 	tool := nextTool()
 	timeout := cfg.Scenario.CallTimeout(tool)
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -177,7 +197,7 @@ func executeOne(ctx context.Context, cfg Config, nextTool func() *scenario.ToolC
 	tctx := scenario.TemplateContext{
 		Iter: j.iter,
 		Env:  cfg.EnvSnapshot,
-		Rand: rand.Float64(),
+		Rand: nextRand(),
 	}
 	args, err := scenario.RenderArgs(tool.Args, tctx)
 	if err != nil {

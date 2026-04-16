@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -338,6 +339,44 @@ func TestOrchestratorWarmupSurvivesCancel(t *testing.T) {
 	_, err := Run(ctx, Config{Scenario: s, Transport: tr, Aggregator: agg, Seed: 1})
 	if err != nil {
 		t.Fatalf("warmup cancel should be absorbed, got: %v", err)
+	}
+}
+
+// TestSeedProducesDeterministicRand is a regression test: the orchestrator
+// used to pull .Rand from the unseeded global math/rand, so two runs with the
+// same --seed emitted different .Rand values in the args template. Callers
+// who rely on reproducible load (e.g. golden-output CI gates) saw flakes. Fix
+// threads a seeded rand source through every tctx.Rand read.
+func TestSeedProducesDeterministicRand(t *testing.T) {
+	run := func(seed int64) []string {
+		var mu sync.Mutex
+		var seen []string
+		tr := &stubTransport{handler: func(method string, params any) ([]byte, error) {
+			raw, _ := json.Marshal(params)
+			mu.Lock()
+			seen = append(seen, string(raw))
+			mu.Unlock()
+			return []byte(`{"jsonrpc":"2.0","id":1,"result":{}}`), nil
+		}}
+		s := makeScenario(
+			scenario.Workload{Requests: 5, Concurrency: 1},
+			[]scenario.ToolCall{{Name: "x", Weight: 1, Args: map[string]any{"r": "{{.Rand}}"}}},
+		)
+		agg := metrics.NewAggregator(10)
+		if _, err := Run(context.Background(), Config{Scenario: s, Transport: tr, Aggregator: agg, Seed: seed}); err != nil {
+			t.Fatal(err)
+		}
+		return seen
+	}
+	a := run(42)
+	b := run(42)
+	if len(a) != len(b) {
+		t.Fatalf("len diverge: %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("--seed did not make .Rand deterministic at iteration %d:\n  a=%s\n  b=%s", i, a[i], b[i])
+		}
 	}
 }
 

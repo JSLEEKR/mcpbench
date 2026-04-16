@@ -224,3 +224,30 @@ func TestSanitizeLabel(t *testing.T) {
 		t.Fatal("unchanged")
 	}
 }
+
+// TestSanitizeLabelStripsCR is a regression test: sanitizeLabel used to pass
+// through '\r' unchanged, so a scenario (or tool) name containing a carriage
+// return injected a bare CR into the Prometheus exposition stream. Most
+// Prometheus parsers treat CR as a line terminator, splitting one metric line
+// into two syntactically invalid lines and failing the scrape. Replace CR
+// with '_' alongside the other forbidden characters.
+func TestSanitizeLabelStripsCR(t *testing.T) {
+	if got := sanitizeLabel("bad\rname"); got != "bad_name" {
+		t.Fatalf("CR not stripped: %q", got)
+	}
+}
+
+// TestWritePrometheusSanitizesCR is the end-to-end counterpart of the
+// sanitizer unit test: no '\r' must survive into the rendered exposition
+// document regardless of the scenario or tool name content.
+func TestWritePrometheusSanitizesCR(t *testing.T) {
+	rf := sampleRun()
+	rf.Scenario = "bad\rscenario"
+	var buf bytes.Buffer
+	if err := WritePrometheus(&buf, rf); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsRune(buf.String(), '\r') {
+		t.Fatalf("CR leaked into Prometheus exposition:\n%s", buf.String())
+	}
+}
