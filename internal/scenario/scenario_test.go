@@ -483,3 +483,29 @@ tools: [{name: t1}]
 		t.Fatal("requests")
 	}
 }
+
+// TestValidateRejectsBothDurationAndRequests is a regression test: a scenario
+// YAML that sets BOTH workload.duration AND workload.requests used to pass
+// validation. The orchestrator then silently honored only Duration and
+// discarded the Requests budget, so the run behaved nothing like what the
+// scenario asked for. The CLI already rejects --duration+--requests at
+// parse time; the YAML path must agree so scenario-validate catches the
+// misconfiguration before the run starts.
+func TestValidateRejectsBothDurationAndRequests(t *testing.T) {
+	yml := `
+name: t
+transport: {type: stdio, cmd: x}
+workload:
+  concurrency: 4
+  duration: 10s
+  requests: 100
+tools: [{name: t1}]
+`
+	_, err := Parse([]byte(yml))
+	if err == nil {
+		t.Fatal("expected mutually-exclusive error")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("error should mention mutually exclusive: %v", err)
+	}
+}

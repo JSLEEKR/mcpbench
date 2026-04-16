@@ -155,6 +155,13 @@ func (w *Workload) validate() error {
 	if w.Duration == 0 && w.Requests == 0 {
 		return fmt.Errorf("scenario: workload must set duration or requests")
 	}
+	if w.Duration > 0 && w.Requests > 0 {
+		// Both set silently picks duration in the orchestrator and discards
+		// the requests budget, which is rarely what the operator meant. The
+		// CLI rejects --duration+--requests for the same reason; the YAML
+		// path must agree.
+		return fmt.Errorf("scenario: workload.duration and workload.requests are mutually exclusive")
+	}
 	if w.Rate == 0 && w.Concurrency == 0 {
 		return fmt.Errorf("scenario: workload must set rate or concurrency")
 	}
