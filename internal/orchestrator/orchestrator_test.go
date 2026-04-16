@@ -309,6 +309,38 @@ func TestOrchestratorEffectiveWorkersDefault(t *testing.T) {
 	}
 }
 
+// TestOrchestratorWarmupSurvivesCancel is a regression test: if the caller
+// cancels the parent context during the warmup phase, runPhases used to
+// return context.Canceled as a fatal error (it only filtered
+// DeadlineExceeded). The measurement phase already filtered both; warmup
+// should too so that Ctrl-C during warmup drops us into the normal drain
+// path instead of bubbling up as an error.
+func TestOrchestratorWarmupSurvivesCancel(t *testing.T) {
+	tr := &stubTransport{handler: func(method string, params any) ([]byte, error) {
+		time.Sleep(10 * time.Millisecond)
+		return []byte(`{"jsonrpc":"2.0","id":1,"result":{}}`), nil
+	}}
+	s := makeScenario(
+		scenario.Workload{
+			Warmup:      500 * time.Millisecond,
+			Duration:    500 * time.Millisecond,
+			Concurrency: 2,
+		},
+		[]scenario.ToolCall{{Name: "x", Weight: 1}},
+	)
+	agg := metrics.NewAggregator(100)
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel mid-warmup.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	_, err := Run(ctx, Config{Scenario: s, Transport: tr, Aggregator: agg, Seed: 1})
+	if err != nil {
+		t.Fatalf("warmup cancel should be absorbed, got: %v", err)
+	}
+}
+
 func containsAny(s string, subs []string) bool {
 	for _, sub := range subs {
 		if len(s) > 0 && len(sub) > 0 && (len(s) >= len(sub)) {

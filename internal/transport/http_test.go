@@ -385,3 +385,73 @@ func TestHTTPAcceptsCustomClient(t *testing.T) {
 		t.Fatal("client not set")
 	}
 }
+
+// TestHTTPSSEDoneEventEndsStream is a regression test for the bug where the
+// `event: done` short-circuit in parseSSE was effectively dead code: flush()
+// unconditionally reset `event=""` via a deferred closure before the outer
+// loop could observe it, so a later frame on the stream could silently
+// overwrite the already-matched frame. After the fix we must stop reading as
+// soon as `event: done` is dispatched and MUST NOT pick up later frames.
+func TestHTTPSSEDoneEventEndsStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		// First frame matching the request id — this is what the client must
+		// ultimately receive.
+		fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"id\":%v,\"result\":{\"first\":true}}\n\n", body["id"])
+		flusher.Flush()
+		// Terminator event.
+		fmt.Fprint(w, "event: done\n\n")
+		flusher.Flush()
+		// A trailing frame whose id also matches; a correctly implemented
+		// client must NOT observe this because the stream was already
+		// terminated by event: done.
+		fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"id\":%v,\"result\":{\"second\":true}}\n\n", body["id"])
+		flusher.Flush()
+	}))
+	defer srv.Close()
+	tr, _ := NewHTTP(HTTPConfig{URL: srv.URL, AllowSSE: true})
+	defer tr.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	raw, err := tr.Call(ctx, "ping", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"first":true`) {
+		t.Fatalf("expected first frame, got: %s", raw)
+	}
+	if strings.Contains(string(raw), `"second":true`) {
+		t.Fatalf("post-done frame leaked into the matched response: %s", raw)
+	}
+}
+
+// TestHTTPSSEHandlesCRLF verifies we tolerate servers that emit CRLF framing
+// (common on Windows-backed HTTP stacks and some misbehaving SSE proxies).
+func TestHTTPSSEHandlesCRLF(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		// Use \r\n line terminators everywhere.
+		fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"id\":%v,\"result\":{\"ok\":true}}\r\n\r\n", body["id"])
+		flusher.Flush()
+		fmt.Fprint(w, "event: done\r\n\r\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+	tr, _ := NewHTTP(HTTPConfig{URL: srv.URL, AllowSSE: true})
+	defer tr.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	raw, err := tr.Call(ctx, "ping", nil)
+	if err != nil {
+		t.Fatalf("crlf sse failed: %v", err)
+	}
+	if !strings.Contains(string(raw), `"ok":true`) {
+		t.Fatalf("got %s", raw)
+	}
+}

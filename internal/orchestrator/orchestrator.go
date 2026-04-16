@@ -96,7 +96,9 @@ func runPhases(ctx context.Context, cfg Config, nextTool func() *scenario.ToolCa
 	if cfg.Scenario.Workload.Warmup > 0 {
 		warmupAgg = metrics.NewAggregator(1024)
 		warmupCtx, cancel := context.WithTimeout(ctx, cfg.Scenario.Workload.Warmup)
-		if err := runPhase(warmupCtx, cfg, nextTool, workers, warmupAgg, cfg.Scenario.Workload.Warmup, 0); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		if err := runPhase(warmupCtx, cfg, nextTool, workers, warmupAgg, cfg.Scenario.Workload.Warmup, 0); err != nil &&
+			!errors.Is(err, context.DeadlineExceeded) &&
+			!errors.Is(err, context.Canceled) {
 			cancel()
 			return 0, err
 		}

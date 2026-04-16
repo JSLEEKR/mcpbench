@@ -182,6 +182,89 @@ func TestCompareExactlyTwoArgs(t *testing.T) {
 	}
 }
 
+// TestCompareRejectsPPForLatency is a regression test: passing
+// `--threshold-p95=+5pp` used to silently accept the threshold and then never
+// trigger (the check compared the percentage-point value against the
+// p95-delta-ms argument, which was hard-coded to 0). We now reject this at
+// flag-parse time so the operator gets a clear error.
+func TestCompareRejectsPPForLatency(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.json")
+	b := filepath.Join(dir, "b.json")
+	_ = os.WriteFile(a, sampleRunJSON(), 0o600)
+	_ = os.WriteFile(b, sampleRunJSON(), 0o600)
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{"compare", a, b, "--threshold-p95=+5pp"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error for pp threshold on p95")
+	}
+	if !strings.Contains(err.Error(), "threshold-p95") {
+		t.Fatalf("error should identify the flag: %v", err)
+	}
+}
+
+// TestCompareRejectsPPForP99 mirrors the p95 guard for p99.
+func TestCompareRejectsPPForP99(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.json")
+	b := filepath.Join(dir, "b.json")
+	_ = os.WriteFile(a, sampleRunJSON(), 0o600)
+	_ = os.WriteFile(b, sampleRunJSON(), 0o600)
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{"compare", a, b, "--threshold-p99=+5pp"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error for pp threshold on p99")
+	}
+}
+
+// TestCompareRejectsPercentForError verifies we reject `+20%` as an error
+// threshold — only percentage-point (pp) makes sense for error-rate deltas,
+// and the old code would silently accept relative / ms thresholds and then
+// never flag an error regression.
+func TestCompareRejectsPercentForError(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.json")
+	b := filepath.Join(dir, "b.json")
+	_ = os.WriteFile(a, sampleRunJSON(), 0o600)
+	_ = os.WriteFile(b, sampleRunJSON(), 0o600)
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{"compare", a, b, "--threshold-error=+20%"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error for %% threshold on error rate")
+	}
+	if !strings.Contains(err.Error(), "threshold-error") {
+		t.Fatalf("error should identify the flag: %v", err)
+	}
+}
+
+// TestCompareRejectsMSForError verifies we reject `+10ms` as an error
+// threshold.
+func TestCompareRejectsMSForError(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.json")
+	b := filepath.Join(dir, "b.json")
+	_ = os.WriteFile(a, sampleRunJSON(), 0o600)
+	_ = os.WriteFile(b, sampleRunJSON(), 0o600)
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{"compare", a, b, "--threshold-error=+10ms"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error for ms threshold on error rate")
+	}
+}
+
+// TestCompareAcceptsMSForLatency verifies the happy path isn't broken.
+func TestCompareAcceptsMSForLatency(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.json")
+	b := filepath.Join(dir, "b.json")
+	_ = os.WriteFile(a, sampleRunJSON(), 0o600)
+	_ = os.WriteFile(b, sampleRunJSON(), 0o600)
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"compare", a, b, "--threshold-p95=+50ms", "--threshold-p99=+100ms"}, &stdout, &stderr); err != nil {
+		t.Fatalf("ms thresholds should work for latency: %v", err)
+	}
+}
+
 func TestApplyCLIOverridesSpawnParses(t *testing.T) {
 	s := minimalScenarioStruct()
 	f := &runFlags{spawn: "node server.js --port 1"}

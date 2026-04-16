@@ -3,6 +3,7 @@
 package metrics
 
 import (
+	goerrors "errors"
 	"math"
 	"sort"
 	"sync"
@@ -179,15 +180,14 @@ func (s *ToolStats) Record(dur time.Duration, err error) {
 		return
 	}
 	s.errCounts[cat]++
-	if cat == mcperrors.CategoryJSONRPC {
+	if cat == mcperrors.CategoryJSONRPC && err != nil {
+		// Use errors.As so wrapped JSON-RPC errors (e.g.
+		// fmt.Errorf("calling tool: %w", NewJSONRPCError(-32000, "x")))
+		// still contribute to the per-code histogram. A direct type
+		// assertion would silently drop these.
 		var rpcErr mcperrors.JSONRPCError
-		if err != nil {
-			// errors.As-like check without importing errors again (avoid cycle
-			// risk). We just type-assert directly for wrapped rpcCoder values.
-			if re, ok := err.(mcperrors.JSONRPCError); ok {
-				s.rpcCodes[re.RPCCode()]++
-				_ = rpcErr
-			}
+		if goerrors.As(err, &rpcErr) {
+			s.rpcCodes[rpcErr.RPCCode()]++
 		}
 	}
 }

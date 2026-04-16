@@ -141,11 +141,11 @@ func parseSSE(r io.Reader, expectedID int64) ([]byte, error) {
 	var matched []byte
 	var event string
 
+	// flush dispatches the accumulated event and clears `current`. It does NOT
+	// touch `event`: the outer loop needs to inspect `event == "done"` after
+	// the dispatching blank line before we reset it.
 	flush := func() {
-		defer func() {
-			event = ""
-			current = nil
-		}()
+		defer func() { current = nil }()
 		if len(current) == 0 {
 			return
 		}
@@ -165,11 +165,16 @@ func parseSSE(r io.Reader, expectedID int64) ([]byte, error) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		// Strip an optional trailing CR so we handle both LF and CRLF framing.
+		if n := len(line); n > 0 && line[n-1] == '\r' {
+			line = line[:n-1]
+		}
 		if line == "" {
 			flush()
 			if event == "done" {
 				break
 			}
+			event = ""
 			continue
 		}
 		if strings.HasPrefix(line, ":") {

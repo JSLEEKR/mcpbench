@@ -42,6 +42,9 @@ func compareExecute(stdout, stderr io.Writer, aPath, bPath string, f *compareFla
 		if err != nil {
 			return err
 		}
+		if th.Kind == compare.ThresholdKindPercentagePoint {
+			return fmt.Errorf("--threshold-p95: percentage-point (pp) is only valid for error rate; use %% or ms")
+		}
 		cfg.P95Threshold = &th
 	}
 	if f.p99 != "" {
@@ -49,12 +52,18 @@ func compareExecute(stdout, stderr io.Writer, aPath, bPath string, f *compareFla
 		if err != nil {
 			return err
 		}
+		if th.Kind == compare.ThresholdKindPercentagePoint {
+			return fmt.Errorf("--threshold-p99: percentage-point (pp) is only valid for error rate; use %% or ms")
+		}
 		cfg.P99Threshold = &th
 	}
 	if f.errDelta != "" {
 		th, err := compare.ParseThreshold(f.errDelta)
 		if err != nil {
 			return err
+		}
+		if th.Kind != compare.ThresholdKindPercentagePoint {
+			return fmt.Errorf("--threshold-error: only percentage-point (pp) is supported (got %q)", f.errDelta)
 		}
 		cfg.ErrorThreshold = &th
 	}

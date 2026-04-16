@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -349,6 +350,28 @@ func TestToolStatsNilError(t *testing.T) {
 	}
 	if len(ts.ErrorBreakdown()) != 0 {
 		t.Fatal("non-empty breakdown")
+	}
+}
+
+// TestToolStatsRecordUnwrapsWrappedJSONRPC is a regression test for a bug
+// where ToolStats.Record used a direct type assertion to extract the RPC
+// code, which silently failed for wrapped errors (e.g. a transport returning
+// `fmt.Errorf("tool %s: %w", name, NewJSONRPCError(...))`). Classify() uses
+// errors.As, so such wrapped errors were counted under jsonrpc in the error
+// breakdown — but the per-code histogram (`rpc_codes`) was empty for them.
+// After the fix, both Classify and the per-code accounting agree.
+func TestToolStatsRecordUnwrapsWrappedJSONRPC(t *testing.T) {
+	ts := NewToolStats("wrap", 10)
+	inner := mcperrors.NewJSONRPCError(-32000, "server error")
+	wrapped := fmt.Errorf("calling tool foo: %w", inner)
+	ts.Record(5*time.Millisecond, wrapped)
+
+	if got := ts.ErrorBreakdown()[mcperrors.CategoryJSONRPC]; got != 1 {
+		t.Fatalf("breakdown jsonrpc = %d, want 1 (Classify already handles %%w)", got)
+	}
+	codes := ts.RPCErrorCodes()
+	if codes[-32000] != 1 {
+		t.Fatalf("rpc_codes[-32000] = %d, want 1 — wrapped JSON-RPC errors were being silently dropped", codes[-32000])
 	}
 }
 
