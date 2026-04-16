@@ -1,0 +1,16 @@
+name: http-mcp-endpoint
+transport:
+  type: http
+  url: http://localhost:8080/mcp
+  headers:
+    Authorization: Bearer ${TOKEN}
+workload:
+  concurrency: 16
+  requests: 1000
+  warmup: 2s
+  timeout: 10s
+tools:
+  - name: query
+    weight: 1
+    args:
+      sql: "SELECT {{.Iter}}"

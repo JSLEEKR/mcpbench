@@ -1,0 +1,15 @@
+name: smoke
+transport:
+  type: stdio
+  cmd: ./testmock
+workload:
+  requests: 50
+  concurrency: 4
+  timeout: 2s
+tools:
+  - name: ping
+    weight: 1
+  - name: echo
+    weight: 1
+    args:
+      hello: world

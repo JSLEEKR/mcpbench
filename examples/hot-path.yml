@@ -1,0 +1,27 @@
+name: awesome-mcp-server-hot-path
+transport:
+  type: stdio
+  cmd: node
+  args: ["./dist/server.js"]
+  env:
+    LOG_LEVEL: warn
+workload:
+  rate: 100
+  duration: 30s
+  warmup: 5s
+  cooldown: 2s
+  timeout: 5s
+tools:
+  - name: read_file
+    weight: 3
+    args:
+      path: "/tmp/a.txt"
+  - name: search
+    weight: 1
+    args:
+      pattern: "iter-{{.Iter}}"
+      max_results: 10
+  - name: list_dir
+    weight: 1
+    args:
+      path: "/"
